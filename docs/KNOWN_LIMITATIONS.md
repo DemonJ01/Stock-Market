@@ -7,7 +7,7 @@ Predictions are experimental, not investment advice. No walk-forward evaluation,
 - [ ] All needed source and assets exist with appropriate usage rights.
 - [ ] Credentials are supplied securely outside version control.
 - [ ] Setup and deployment instructions work on a clean machine.
-- [ ] CI checks and meaningful application tests pass.
+- [ ] Meaningful application tests pass.
 - [ ] Security and data-privacy reviews are complete.
 - [ ] Relevant dependencies and licenses have been audited.
 - [ ] Screenshots, feature statements and benchmarks reflect verified behavior.
