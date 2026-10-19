@@ -1,227 +1,159 @@
-import math
+"""Download market data, evaluate an LSTM, and forecast one closing price.
+
+Research/educational use only; not investment advice.
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import date
+from typing import Sequence
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from datetime import date, timedelta
-from pandas.plotting import register_matplotlib_converters
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.preprocessing import MinMaxScaler
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
 import yfinance as yf
-
-today = date.today()
-date_today = today.strftime("%Y-%m-%d")
-date_start = '2023-01-10'
-
-# Getting Stocks quotes
-stock = input("Enter stock name:")
-stockname = stock
-symbol = '^GSPC'
-
-# Download stock data
-df = yf.download(symbol, start=date_start, end=date_today)
-
-# Download Nifty 50 data
-nifty_symbol = '^NSEI'
-nifty_df = yf.download(nifty_symbol, start=date_start, end=date_today)
-
-# Taking a look at the shape of the dataset
-print(df.shape)
-df.head(5)
-
-register_matplotlib_converters()
-years = mdates.YearLocator()
-
-# Plotting both stock and Nifty 50 on the same figure
-fig, (ax1, ax2, ax3) = plt.subplots(3, sharex=True, figsize=(16, 12))
-
-# Plot for Stock
-ax1.fill_between(df.index, 0, df['Close'], color='#b9e1fa')
-ax1.legend([stockname], fontsize=12)
-ax1.set_title(stockname + ' from ' + date_start + ' to ' + date_today, fontsize=16)
-ax1.plot(df['Close'], color='#039dfc', label=stockname, linewidth=1.0)
-ax1.set_ylabel('Stocks', fontsize=12)
-
-# Plot for Nifty 50
-ax2.fill_between(nifty_df.index, 0, nifty_df['Close'], color='#b9e1fa')
-ax2.legend(['Nifty 50'], fontsize=12)
-ax2.set_title('Nifty 50 from ' + date_start + ' to ' + date_today, fontsize=16)
-ax2.plot(nifty_df['Close'], color='#E91D9E', label='Nifty 50', linewidth=1.0)
-ax2.set_ylabel('Nifty 50', fontsize=12)
-
-# Plot for Comparison
-ax3.fill_between(df.index, 0, df['Close'], color='#b9e1fa')
-ax3.fill_between(nifty_df.index, 0, nifty_df['Close'], color='#F0845C', alpha=0.5)  # Change the color as needed
-ax3.legend([stockname, 'Nifty 50'], fontsize=12)
-ax3.set_title(stockname + ' vs Nifty 50 from ' + date_start + ' to ' + date_today, fontsize=16)
-ax3.plot(df['Close'], color='#039dfc', label=stockname, linewidth=1.0)
-ax3.plot(nifty_df['Close'], color='#E91D9E', label='Nifty 50', linewidth=1.0)
-ax3.set_ylabel('Comparison', fontsize=12)
-
-# Format x-axis as years
-ax1.xaxis.set_major_locator(years)
-ax2.xaxis.set_major_locator(years)
-ax3.xaxis.set_major_locator(years)
-
-plt.show()
-
-# Continue with the rest of your code...
-train_df = df.filter(['Close'])
-data_unscaled = train_df.values
-
-# Get the number of rows to train the model on 80% of the data
-train_data_length = math.ceil(len(data_unscaled) * 0.8)
-
-# Transform features by scaling each feature to a range between 0 and 1
-mmscaler = MinMaxScaler(feature_range=(0, 1))
-np_data = mmscaler.fit_transform(data_unscaled)
-
-sequence_length = 50
-
-# Prediction Index
-index_Close = train_df.columns.get_loc("Close")
-print(index_Close)
-# Split the training data into train and train data sets
-# As a first step, we get the number of rows to train the model on 80% of the data
-train_data_len = math.ceil(np_data.shape[0] * 0.8)
-
-# Create the training and test data
-train_data = np_data[0:train_data_len, :]
-test_data = np_data[train_data_len - sequence_length:, :]
+from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import MinMaxScaler
 
 
-# The RNN needs data with the format of [samples, time steps, features]
-# Here, we create N samples, sequence_length time steps per sample, and 6 features
-def partition_dataset(sequence_length, train_df):
-    x, y = [], []
-    data_len = train_df.shape[0]
-    for i in range(sequence_length, data_len):
-        x.append(train_df[i - sequence_length:i, :])  # contains sequence_length values 0-sequence_length * columsn
-        y.append(train_df[
-                     i, index_Close])  # contains the prediction values for validation (3rd column = Close),  for single-step prediction
+def close_prices(symbol: str, start: str) -> pd.Series:
+    """Return a consistently shaped closing-price Series for one ticker."""
+    result = yf.download(symbol, start=start, end=date.today().isoformat(),
+                         auto_adjust=True, progress=False)
+    if result.empty or "Close" not in result:
+        raise ValueError(f"No historical closing prices returned for {symbol!r}.")
+    close = result["Close"]
+    # Recent yfinance releases can return a one-column DataFrame with a
+    # MultiIndex, even when downloading a single ticker.
+    if isinstance(close, pd.DataFrame):
+        if close.shape[1] != 1:
+            raise ValueError(f"Expected one closing-price column for {symbol!r}.")
+        close = close.iloc[:, 0]
+    clean = pd.to_numeric(close, errors="coerce").dropna().sort_index()
+    if clean.empty:
+        raise ValueError(f"No valid closing prices for {symbol!r}.")
+    return clean.astype(float)
 
-    # Convert the x and y to numpy arrays
-    x = np.array(x)
-    y = np.array(y)
+
+def make_sequences(values: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray]:
+    """Build (samples, timesteps, features) inputs and next-day targets."""
+    values = np.asarray(values, dtype=float).reshape(-1, 1)
+    if window < 1:
+        raise ValueError("Window must be at least 1.")
+    if len(values) <= window:
+        return np.empty((0, window, 1)), np.empty((0,))
+    x = np.array([values[i - window:i] for i in range(window, len(values))])
+    y = values[window:, 0]
     return x, y
 
 
-# Generate training data and test data
-x_train, y_train = partition_dataset(sequence_length, train_data)
-x_test, y_test = partition_dataset(sequence_length, test_data)
-
-# Print the shapes: the result is: (rows, training_sequence, features) (prediction value, )
-print(x_train.shape, y_train.shape)
-print(x_test.shape, y_test.shape)
-
-# Validate that the prediction value and the input match up
-# The last close price of the second input sample should equal the first prediction value
-print(x_test[1][sequence_length - 1][index_Close])
-print(y_test[0])
-
-
-model = Sequential()
-
-neurons = sequence_length
-
-# Model with sequence_length Neurons
-# inputshape = sequence_length Timestamps
-model.add(LSTM(neurons, return_sequences=True, input_shape=(x_train.shape[1], 1)))
-model.add(LSTM(neurons, return_sequences=False))
-model.add(Dense(8, activation='relu'))
-model.add(Dense(1))
-
-# Compile the model
-model.compile(optimizer='adam', loss='mean_squared_error')
-
-model.fit(x_train, y_train, batch_size=16, epochs=10)
+def safe_mape(actual: Sequence[float], prediction: Sequence[float]) -> float:
+    """MAPE percentage excluding zero actual prices."""
+    actual_array = np.asarray(actual, dtype=float).reshape(-1)
+    predicted_array = np.asarray(prediction, dtype=float).reshape(-1)
+    if actual_array.shape != predicted_array.shape:
+        raise ValueError("Actual and predicted series must have equal lengths.")
+    valid = actual_array != 0
+    if not valid.any():
+        return float("nan")
+    return float(np.mean(np.abs(
+        (actual_array[valid] - predicted_array[valid]) / actual_array[valid]
+    )) * 100)
 
 
-y_pred_scaled = model.predict(x_test)
-y_pred = mmscaler.inverse_transform(y_pred_scaled)
-y_test_unscaled = mmscaler.inverse_transform(y_test.reshape(-1, 1))
+def analyze(symbol: str, benchmark: str, start: str, window: int,
+            epochs: int, show_plots: bool = True) -> None:
+    # Import TensorFlow only when training: simple utility tests can run without it.
+    from tensorflow.keras import Sequential
+    from tensorflow.keras.layers import Dense, Input, LSTM
+
+    prices = close_prices(symbol, start)
+    if len(prices) < window + 12:
+        raise ValueError(
+            f"Need at least {window + 12} trading days for a train/test split; "
+            f"received {len(prices)}."
+        )
+    split = int(len(prices) * 0.8)
+    if split <= window or split >= len(prices):
+        raise ValueError("Not enough data for the selected sequence window.")
+
+    # Prevent data leakage: learn scaling parameters using TRAINING prices only.
+    scaler = MinMaxScaler()
+    scaler.fit(prices.iloc[:split].to_numpy().reshape(-1, 1))
+    scaled = scaler.transform(prices.to_numpy().reshape(-1, 1))
+    x_train, y_train = make_sequences(scaled[:split], window)
+    x_test, y_test = make_sequences(scaled[split - window:], window)
+    if not len(x_train) or not len(x_test):
+        raise ValueError("No training or validation sequences were generated.")
+
+    model = Sequential([
+        Input(shape=(window, 1)),
+        LSTM(50, return_sequences=True),
+        LSTM(50),
+        Dense(8, activation="relu"),
+        Dense(1),
+    ])
+    model.compile(optimizer="adam", loss="mean_squared_error")
+    model.fit(x_train, y_train, epochs=epochs, batch_size=16, verbose=1)
+
+    predictions = scaler.inverse_transform(
+        model.predict(x_test, verbose=0)
+    ).reshape(-1)
+    actual = scaler.inverse_transform(y_test.reshape(-1, 1)).reshape(-1)
+    validation = pd.DataFrame(
+        {"Actual": actual, "Predicted": predictions},
+        index=prices.index[split:],
+    )
+    validation["Difference"] = validation["Predicted"] - validation["Actual"]
+    print(f"\nTicker: {symbol}; validation samples: {len(validation)}")
+    print(f"MAE: {mean_absolute_error(actual, predictions):.3f}")
+    print(f"MAPE: {safe_mape(actual, predictions):.2f}%")
+    print(f"Median APE: {np.median(np.abs((actual - predictions) / actual)) * 100:.2f}%")
+
+    next_input = scaled[-window:].reshape(1, window, 1)
+    next_price = float(scaler.inverse_transform(
+        model.predict(next_input, verbose=0)
+    )[0, 0])
+    last_price = float(prices.iloc[-1])
+    change_percent = (next_price / last_price - 1) * 100
+    print(f"Last observed close: {last_price:.2f}")
+    print(f"Forecast next trading-day close: {next_price:.2f} ({change_percent:+.2f}%)")
+
+    if show_plots:
+        fig, axes = plt.subplots(2, 1, figsize=(12, 9), constrained_layout=True)
+        axes[0].plot(prices.index, prices, label=symbol)
+        if benchmark:
+            try:
+                reference = close_prices(benchmark, start)
+                axes[0].plot(reference.index, reference, label=benchmark)
+            except ValueError as exc:
+                print(f"Benchmark unavailable: {exc}")
+        axes[0].set_title("Historical closing prices (unadjusted between tickers)")
+        axes[0].legend()
+        axes[1].plot(validation.index, validation["Actual"], label="Actual")
+        axes[1].plot(validation.index, validation["Predicted"], label="LSTM prediction")
+        axes[1].set_title("Out-of-sample validation")
+        axes[1].legend()
+        plt.show()
 
 
-# Mean Absolute Error (MAE)
-MAE = mean_absolute_error(y_test_unscaled, y_pred)
-print(f'Median Absolute Error (MAE): {np.round(MAE, 2)}')
-
-# Mean Absolute Percentage Error (MAPE)
-MAPE = np.mean((np.abs(np.subtract(y_test_unscaled, y_pred)/ y_test_unscaled))) * 100
-print(f'Mean Absolute Percentage Error (MAPE): {np.round(MAPE, 2)} %')
-
-# Median Absolute Percentage Error (MDAPE)
-MDAPE = np.median((np.abs(np.subtract(y_test_unscaled, y_pred)/ y_test_unscaled)) ) * 100
-print(f'Median Absolute Percentage Error (MDAPE): {np.round(MDAPE, 2)} %')
-
-
-# The date from which on the date is displayed
-display_start_date = "2019-01-01"
-
-# Add the difference between the valid and predicted prices
-train = train_df[:train_data_length + 1]
-valid = train_df[train_data_length:]
-valid.insert(1, "Predictions", y_pred, True)
-valid.insert(1, "Difference", valid["Predictions"] - valid["Close"], True)
-
-# Zoom in to a closer timeframe
-valid = valid[valid.index > display_start_date]
-train = train[train.index > display_start_date]
-
-# Visualize the data along with Nifty 50
-# Visualize the data
-fig, ax = plt.subplots(figsize=(16, 8), sharex=True)
-
-plt.title("Predictions vs Ground Truth", fontsize=20)
-plt.ylabel(stockname, fontsize=18)
-plt.plot(train["Close"], color="#039dfc", linewidth=1.0)
-plt.plot(valid["Predictions"], color="#E91D9E", linewidth=1.0)
-plt.plot(valid["Close"], color="black", linewidth=1.0)
-plt.legend(["Train", "Test Predictions", "Ground Truth"], loc="upper left")
-
-# Fill between plotlines
-# ax.fill_between(yt.index, 0, yt["Close"], color="#b9e1fa")
-# ax.fill_between(yv.index, 0, yv["Predictions"], color="#F0845C")
-# ax.fill_between(yv.index, yv["Close"], yv["Predictions"], color="grey")
-
-# Create the bar plot with the differences
-valid.loc[valid["Difference"] >= 0, 'diff_color'] = "#2BC97A"
-valid.loc[valid["Difference"] < 0, 'diff_color'] = "#C92B2B"
-plt.bar(valid.index, valid["Difference"], width=0.8, color=valid['diff_color'])
-
-plt.show()
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--symbol", default="^GSPC", help="Yahoo Finance ticker")
+    parser.add_argument("--benchmark", default="^NSEI", help="Comparison ticker")
+    parser.add_argument("--start", default="2023-01-10", help="YYYY-MM-DD")
+    parser.add_argument("--window", type=int, default=50, help="Sequence length")
+    parser.add_argument("--epochs", type=int, default=10, help="Training epochs")
+    parser.add_argument("--no-plot", action="store_true", help="Skip interactive plots")
+    args = parser.parse_args()
+    if args.epochs < 1:
+        parser.error("--epochs must be at least 1")
+    try:
+        analyze(args.symbol, args.benchmark, args.start,
+                args.window, args.epochs, not args.no_plot)
+    except (ValueError, KeyError, RuntimeError) as exc:
+        parser.exit(1, f"Error: {exc}\n")
 
 
-dif = valid['Close'] - valid['Predictions']
-valid.insert(2, 'Difference', dif, True)
-valid.tail(5)
-
-
-# Get fresh data
-df_new = df.filter(['Close'])
-
-# Get the last N day closing price values and scale the data to be values between 0 and 1
-last_days_scaled = mmscaler.transform(df_new[-sequence_length:].values)
-
-# Create an empty list and Append past n days
-X_test = []
-X_test.append(last_days_scaled)
-
-# Convert the X_test data set to a numpy array and reshape the data
-X_test = np.array(X_test)
-X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
-
-# Get the predicted scaled price, undo the scaling and output the predictions
-pred_price = model.predict(X_test)
-pred_price_unscaled = mmscaler.inverse_transform(pred_price)
-
-# Print last price and predicted price for the next day
-price_today = round(df_new['Close'][-1], 2)
-predicted_price = round(pred_price_unscaled.ravel()[0], 2)
-percent = round(100 - (predicted_price * 100)/price_today, 2)
-
-plus = '+'; minus = ''
-print(f'The close price for {stockname} at {today} was {price_today}')
-print(f'The predicted close price is {predicted_price} ({plus if percent > 0 else minus}{percent}%)')
+if __name__ == "__main__":
+    main()
