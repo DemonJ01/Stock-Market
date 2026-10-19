@@ -1,84 +1,89 @@
-# Stock-Market-Trend-Analysis-using-LSTM-Model
+# Stock Market Trend Analysis with LSTM
 
-## Overview
-This project uses Long Short-Term Memory (LSTM) networks to predict stock prices. It includes the implementation of an LSTM model to analyze historical stock data and make predictions for future closing prices. The project covers the training of the model, evaluation metrics, and visualization of the predictions against actual stock prices.
+A Python educational project that downloads historical market prices, trains a Long Short-Term Memory (LSTM) network and compares out-of-sample predicted closing prices with actual closing prices.
 
-## Getting Started
+> **Disclaimer:** Predictions are experimental. This is not financial advice, a trading strategy, or a validated forecasting service. Market prices are volatile and models can fail.
 
-### Prerequisites
-- Python 3.x
-- Libraries: numpy, pandas, matplotlib, scikit-learn, keras, yfinance
+## Features
 
-USAGE----
-When prompted, enter the stock name for which you want to predict prices.
-The script downloads historical stock data using Yahoo Finance API.
-It visualizes the stock's closing prices along with Nifty 50 index.
-The LSTM model is trained and evaluated using mean absolute error, mean absolute percentage error, and median absolute percentage error.
-Predictions are visualized against the actual stock prices.
+- Download daily historical prices from Yahoo Finance using [yfinance](https://github.com/ranaroussi/yfinance).
+- Select the ticker, comparison index, historical start date, sequence length and training epochs through command-line arguments.
+- Train a two-layer LSTM on the first 80% of available observations.
+- Fit MinMaxScaler on *training data only* to avoid leaking future observations into training.
+- Evaluate held-out observations using MAE, MAPE and median absolute percentage error.
+- Display optional charts for market history and the prediction/actual comparison.
+- Produce one experimental next-trading-day closing-price forecast.
 
-Results
-The script generates plots showing the stock's historical prices, predicted prices, and the difference between them.
-Evaluation metrics (MAE, MAPE, MDAPE) are displayed in the console.
-The last known price and the predicted price for the next day are printed.
+## Requirements
 
-output pics :
-1)  [image](https://github.com/paradisekin/Stock-Market-Trend-Analysis-using-LSTM-Model/assets/126254105/da911c68-fec9-4ec9-92c8-31dfabf11ad0)
-2)  [image](https://github.com/paradisekin/Stock-Market-Trend-Analysis-using-LSTM-Model/assets/126254105/8b97b756-5b05-4ac9-a93a-39d0cd0c2921)
-3)  [image](https://github.com/paradisekin/Stock-Market-Trend-Analysis-using-LSTM-Model/assets/126254105/2e2defbe-ca06-4959-8e9e-52e1e7b7e9f1)
+- Python 3.11 recommended.
+- Internet access for Yahoo Finance downloads.
+- TensorFlow and a CPU/GPU capable of running Keras training.
+- A graphical desktop for plotting, unless the no-plot option is used.
 
+## Installation
 
-Running the Project in VS Code-----
+~~~bash
+git clone https://github.com/DemonJ01/Stock-Market.git
+cd Stock-Market
+python -m venv .venv
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
+~~~
 
-1.Clone or Download the Repository:
+## Usage
 
-2.Copy or fork the repository from GitHub.
-If you prefer, you can download the code as a ZIP file and extract it.
-Open the Project in VS Code:
+~~~bash
+python Main.py --symbol AAPL --benchmark "^NSEI" --start 2023-01-10 --epochs 10
+~~~
 
-3.Open Visual Studio Code on your local machine.
-Install Required Libraries:
+For a headless run:
 
-4.Open the terminal in VS Code.
-Run the following command to install the necessary libraries:   pip install -r requirements.txt
+~~~bash
+python Main.py --symbol "^GSPC" --no-plot
+~~~
 
-5.Enter Stock Name:
-When prompted, enter the name of the stock for which you want to predict future prices.
+See all command-line options with: python Main.py --help
 
-6.View Results:
-The script will download data, train the LSTM model, and display visualizations and evaluation metrics.
+Yahoo Finance ticker formats may differ from company names. For example, AAPL is Apple, ^GSPC is the S&P 500 index, and ^NSEI is Nifty 50. The comparison chart displays raw values, not normalized investment returns; do not directly compare absolute levels as performance.
 
+## How the model works
 
-Running the Project in Google Colab
-1.Open Google Colab.
+1. Download the selected ticker's closing-price history.
+2. Reserve the last 20% for chronological validation, not random shuffling.
+3. Fit normalization on training observations only.
+4. Create rolling windows of 50 previous prices by default.
+5. Fit the LSTM and predict the reserved observations.
+6. Invert normalization to compute metrics in price units.
+7. Use the latest 50 available prices to produce one experimental forecast.
 
-2.Create a New Notebook:
-Click on "File" > "New Notebook" in Google Colab.
+The model is a simple univariate baseline. It does not incorporate sentiment, fundamentals, transaction costs, or market regimes. Forecasting accuracy is **not guaranteed**. The model is not a walk-forward backtest and it is not production-trading ready.
 
-3.Copy and Paste Code:
-Copy the entire content of stock_prediction.py script.
-Paste it into a code cell in the Colab notebook.
+## Testing
 
-4.Run the Notebook:
-Execute the code cell.
-Follow the prompts to enter the stock name for prediction.
+~~~bash
+python -m pytest -q
+python -m compileall -q Main.py tests
+~~~
 
-5.View Results:
-Colab will display visualizations and results directly in the notebook.
-No need to install additional libraries as Colab comes with them preinstalled.
+Tests cover deterministic data preparation and metric utilities. End-to-end training requires historical downloads and a TensorFlow runtime.
 
+## Repository layout
 
-Notes:
-Google Colab Recommended:
-Using Google Colab is recommended as it eliminates the need to install extra libraries locally.
+~~~text
+Main.py             Command-line application, training and plotting
+requirements.txt    Python dependencies
+tests/              Unit tests (do not require model training)
+.github/workflows/  Automated syntax/unit-test checks
+~~~
 
-Internet Connection:
-Ensure your machine or Colab notebook has an internet connection for downloading stock data.
+## Troubleshooting
 
-Feedback and Issues:
-Feel free to provide feedback issues on the GitHub repository.
+- **No prices returned:** verify the ticker, network, and Yahoo Finance service.
+- **TensorFlow installation error:** use a supported Python version and platform.
+- **Too few data points:** increase the historical date range or reduce the sequence window.
+- **Plotting unavailable:** pass --no-plot.
 
+## Responsible use
 
-
-
-
-
+Do not use model forecasts as the sole basis for real-money trading. Verify data licenses and service terms for your intended use.
