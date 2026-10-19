@@ -68,6 +68,8 @@ def analyze(symbol: str, benchmark: str, start: str, window: int,
     from tensorflow.keras.layers import Dense, Input, LSTM
 
     prices = close_prices(symbol, start)
+    if window < 1:
+        raise ValueError('Window must be at least 1')
     if len(prices) < window + 12:
         raise ValueError(
             f"Need at least {window + 12} trading days for a train/test split; "
@@ -108,7 +110,9 @@ def analyze(symbol: str, benchmark: str, start: str, window: int,
     print(f"\nTicker: {symbol}; validation samples: {len(validation)}")
     print(f"MAE: {mean_absolute_error(actual, predictions):.3f}")
     print(f"MAPE: {safe_mape(actual, predictions):.2f}%")
-    print(f"Median APE: {np.median(np.abs((actual - predictions) / actual)) * 100:.2f}%")
+    valid_nonzero = actual != 0
+    median_ape = float(np.median(np.abs((actual[valid_nonzero] - predictions[valid_nonzero]) / actual[valid_nonzero])) * 100) if valid_nonzero.any() else float('nan')
+    print(f"Median APE: {median_ape:.2f}%")
 
     next_input = scaled[-window:].reshape(1, window, 1)
     next_price = float(scaler.inverse_transform(
@@ -128,7 +132,7 @@ def analyze(symbol: str, benchmark: str, start: str, window: int,
                 axes[0].plot(reference.index, reference, label=benchmark)
             except ValueError as exc:
                 print(f"Benchmark unavailable: {exc}")
-        axes[0].set_title("Historical closing prices (unadjusted between tickers)")
+        axes[0].set_title("Historical adjusted closing prices (raw values; not normalized returns)")
         axes[0].legend()
         axes[1].plot(validation.index, validation["Actual"], label="Actual")
         axes[1].plot(validation.index, validation["Predicted"], label="LSTM prediction")
