@@ -5,7 +5,7 @@ Research/educational use only; not investment advice.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 from typing import Sequence
 
 import matplotlib.pyplot as plt
@@ -18,8 +18,21 @@ from sklearn.preprocessing import MinMaxScaler
 
 def close_prices(symbol: str, start: str) -> pd.Series:
     """Return a consistently shaped closing-price Series for one ticker."""
-    result = yf.download(symbol, start=start, end=date.today().isoformat(),
-                         auto_adjust=True, progress=False)
+    if not symbol.strip():
+        raise ValueError("A non-empty ticker symbol is required.")
+    try:
+        start_date = date.fromisoformat(start)
+    except ValueError as exc:
+        raise ValueError("Start date must use YYYY-MM-DD.") from exc
+    if start_date >= date.today():
+        raise ValueError("Start date must be before today.")
+    try:
+        # yfinance uses an exclusive end date, so include the current day.
+        result = yf.download(symbol.strip(), start=start,
+                             end=(date.today() + timedelta(days=1)).isoformat(),
+                             auto_adjust=True, progress=False)
+    except Exception as exc:
+        raise RuntimeError(f"Could not download prices for {symbol!r}.") from exc
     if result.empty or "Close" not in result:
         raise ValueError(f"No historical closing prices returned for {symbol!r}.")
     close = result["Close"]
@@ -53,7 +66,7 @@ def safe_mape(actual: Sequence[float], prediction: Sequence[float]) -> float:
     predicted_array = np.asarray(prediction, dtype=float).reshape(-1)
     if actual_array.shape != predicted_array.shape:
         raise ValueError("Actual and predicted series must have equal lengths.")
-    valid = actual_array != 0
+    valid = (actual_array != 0) & np.isfinite(actual_array) & np.isfinite(predicted_array)
     if not valid.any():
         return float("nan")
     return float(np.mean(np.abs(
@@ -110,7 +123,7 @@ def analyze(symbol: str, benchmark: str, start: str, window: int,
     print(f"\nTicker: {symbol}; validation samples: {len(validation)}")
     print(f"MAE: {mean_absolute_error(actual, predictions):.3f}")
     print(f"MAPE: {safe_mape(actual, predictions):.2f}%")
-    valid_nonzero = actual != 0
+    valid_nonzero = (actual != 0) & np.isfinite(actual) & np.isfinite(predictions)
     median_ape = float(np.median(np.abs((actual[valid_nonzero] - predictions[valid_nonzero]) / actual[valid_nonzero])) * 100) if valid_nonzero.any() else float('nan')
     print(f"Median APE: {median_ape:.2f}%")
 
@@ -119,7 +132,7 @@ def analyze(symbol: str, benchmark: str, start: str, window: int,
         model.predict(next_input, verbose=0)
     )[0, 0])
     last_price = float(prices.iloc[-1])
-    change_percent = (next_price / last_price - 1) * 100
+    change_percent = (next_price / last_price - 1) * 100 if last_price else float('nan')
     print(f"Last observed close: {last_price:.2f}")
     print(f"Forecast next trading-day close: {next_price:.2f} ({change_percent:+.2f}%)")
 
