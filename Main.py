@@ -76,10 +76,6 @@ def safe_mape(actual: Sequence[float], prediction: Sequence[float]) -> float:
 
 def analyze(symbol: str, benchmark: str, start: str, window: int,
             epochs: int, show_plots: bool = True) -> None:
-    # Import TensorFlow only when training: simple utility tests can run without it.
-    from tensorflow.keras import Sequential
-    from tensorflow.keras.layers import Dense, Input, LSTM
-
     prices = close_prices(symbol, start)
     if window < 1:
         raise ValueError('Window must be at least 1')
@@ -100,6 +96,9 @@ def analyze(symbol: str, benchmark: str, start: str, window: int,
     x_test, y_test = make_sequences(scaled[split - window:], window)
     if not len(x_train) or not len(x_test):
         raise ValueError("No training or validation sequences were generated.")
+
+    from tensorflow.keras import Sequential
+    from tensorflow.keras.layers import Dense, Input, LSTM
 
     model = Sequential([
         Input(shape=(window, 1)),
@@ -165,6 +164,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.epochs < 1:
         parser.error("--epochs must be at least 1")
+    if args.window < 1:
+        parser.error("--window must be at least 1")
     try:
         analyze(args.symbol, args.benchmark, args.start,
                 args.window, args.epochs, not args.no_plot)
